@@ -268,8 +268,9 @@ def review_decision(st, user, body):
         rid = a.get("sample_round_id")
         if rid and st["sample_rounds"][rid]["internal"]["state"] != "passed":
             raise ApiError(409, "The linked sample review has not been passed in Sampling. Complete that review first; approval here cannot bypass it.", "gate")
-        if a.get("inspection_gate") and not any(i["result"] == "pass" for i in st["inspections"].values() if i["allocation_id"] == a["inspection_gate"]):
-            raise ApiError(409, "The linked inspection has not passed. Record the re-inspection first.", "gate")
+        rc = a.get("requires_recheck_of")
+        if rc and not any(i["result"] == "pass" and i.get("recheck_of") == rc for i in st["inspections"].values()):
+            raise ApiError(409, "The re-inspection of the failed lot has not been recorded as a pass in Production. Record it there first; approval here cannot release the lot.", "gate")
         _complete(st, user, a, f"Approved by reviewer: {body['comment'].strip()}", None)
     elif body["decision"] == "changes":
         a["status"] = "open"

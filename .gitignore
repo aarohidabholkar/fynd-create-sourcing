@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 backend/data/*.db
 .venv/
+frontend/test-results/
+frontend/playwright-report/

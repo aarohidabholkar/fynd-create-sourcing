@@ -762,7 +762,7 @@ def record_inspection(st, user, body):
         res = add_action(st, user, {"title": body["follow_up_title"], "assignee_id": body.get("follow_up_assignee") or user["id"], "work_id": w, "style_id": al["style_id"],
                                     "vendor_id": al["vendor_id"], "due": body.get("follow_up_due")})
         rec["follow_up"] = res["action_id"]
-        st["actions"][res["action_id"]]["inspection_gate"] = al["id"]
+        st["actions"][res["action_id"]]["requires_recheck_of"] = iid
     add_event(st, user["id"], "inspection", f"{body['type']} inspection {body['result']}: {body['lot']} ({st['vendors'][al['vendor_id']]['name']})",
               f"Plan: {body['plan_ref']}. " + ("Re-inspection covered: " + body["rechecked"] + ". " if recheck_of else "") +
               ("Only this scope is cleared; other lots are unaffected." if body["result"] == "pass" else "Release blocked for this scope."), sc)
