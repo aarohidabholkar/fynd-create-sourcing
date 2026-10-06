@@ -1,0 +1,9 @@
+# Render Blueprint: deploys this branch and redeploys automatically on every push to it.
+services:
+  - type: web
+    name: fynd-create-sourcing
+    runtime: docker
+    branch: claude/fynd-create-sourcing-5bvj6z
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/state
