@@ -861,3 +861,14 @@ def receive_brand_confirmation(st, user, body):
               _style_scope(st, s, sample_round_id=r["id"]))
     bump_work(st, s["work_id"])
     return {"message": " ".join(msgs)}
+
+
+@op("add_round_photo")
+def add_round_photo(st, user, body):
+    """Attach a (simulated) review photo with a caption to a sample round. No file is stored in the prototype."""
+    need(user, "technical_review")
+    require(body, "round_id", "name")
+    r = get(st, "sample_rounds", body["round_id"], "Sample round")
+    r.setdefault("photos", []).append({"id": nid(st, "ph"), "name": body["name"].strip(), "caption": (body.get("caption") or "").strip(), "uploaded_at": now(),
+                                      "by": user["id"], "demo_placeholder": True})
+    return {}
