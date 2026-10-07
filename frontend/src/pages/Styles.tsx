@@ -104,6 +104,11 @@ function StyleOverview({ styleId }: { styleId: string }) {
 
   type Todo = { key: string; title: string; ctx: string; owner?: string; due?: string | null; cta: string; go: () => void; tone?: string }
   const todos: Todo[] = []
+  const tpS = d.techpack.review_state
+  if (style.bom.items.length > 0 && tpS !== 'approved') {
+    const canR = (st.users[st.me].caps as string[]).includes('technical_review')
+    todos.push({ key: 'tp', title: d.techpack.content_complete ? 'Review tech pack' : 'Complete and review tech pack', ctx: ({ not_started: 'Not signed off yet', in_review: 'Review in progress', changes_requested: 'Changes requested; owner to address', stale: 'Content changed after sign-off' } as R)[tpS] || '', cta: canR ? 'Review tech pack' : 'Open tech pack', go: () => nav(`/styles/${styleId}/overview?doc=techpack`) })
+  }
   rounds.filter(r => r.received > 0 && ['not_started', 'in_progress'].includes(r.internal.state)).forEach(r => { const rq = st.sample_requests[r.request_id]; todos.push({ key: 'rv' + r.id, title: `Review ${rq.type} sample round ${r.round}`, ctx: `${st.vendors[rq.vendor_id].name} · ${r.received} piece(s) received`, cta: 'Start review', go: () => nav(`/styles/${styleId}/sampling?round=${r.id}`) }) })
   quotes.filter(x => x.state === 'received').forEach(x => todos.push({ key: 'q' + x.id, title: `Review quote v${x.version}`, ctx: `${st.vendors[x.vendor_id].name} · no decision recorded`, cta: 'Review quote', go: () => nav(`/styles/${styleId}/costing?quote=${x.id}`) }))
   allocs.filter(a => a.gate3.state !== 'signed').forEach(a => todos.push({ key: 'g' + a.id, title: `Complete readiness sign-off: ${a.label}`, ctx: st.derived.allocations[a.id].position, cta: 'Open readiness', go: () => nav(`/styles/${styleId}/production?alloc=${a.id}`) }))
@@ -165,7 +170,7 @@ function StylePage() {
   const st = s!
   const nav = useNavigate()
   const [q, setQ] = useSearchParams()
-  const [dlg, setDlg] = useState<null | 'tech' | 'bom' | 'pom' | 'files' | 'info'>(null)
+  const [dlg, setDlg] = useState<null | 'tech' | 'bom' | 'pom' | 'files' | 'info'>(q.get('doc') === 'techpack' ? 'tech' : null)
   const style = st.styles[styleId!]
   const actionId = q.get('action')
   if (!style) return <div className="page-body"><Empty title="Style not found">This style is not available. <Link to="/styles">Back to Styles</Link></Empty></div>
@@ -180,6 +185,7 @@ function StylePage() {
         sub={<>{style.id} · {style.category}{style.season && ` · ${style.season}`} · Owner <Person id={style.owner_id} /> {style.lifecycle === 'draft' && <Badge tone="attention">Draft</Badge>}</>}
         actions={<><button className="btn" onClick={() => setDlg('tech')}>Tech pack</button><button className="btn" onClick={() => setDlg('bom')}>BOM</button><button className="btn" onClick={() => setDlg('pom')}>Measurements</button><button className="btn" onClick={() => setDlg('files')}>Files</button><button className="btn" onClick={() => setDlg('info')}>Style information</button></>}>
         <div className="row wrap mb-8" style={{ gap: 6 }} aria-label="Readiness">{chips.map(([k, l]) => <Badge key={k} tone={d.readiness[k].ready ? 'success' : 'attention'} title={d.readiness[k].missing.map((m: R) => m.label).join('; ')}>{d.readiness[k].ready ? '✓' : '○'} {l} {d.readiness[k].ready ? 'ready' : 'not ready'}</Badge>)}
+ <button className="link" onClick={() => setDlg('tech')} aria-label="Open tech pack review"><Badge tone={d.techpack.review_state === 'approved' ? 'success' : d.techpack.review_state === 'not_started' ? '' : 'attention'}>{d.techpack.review_state === 'approved' ? '✓ Tech pack signed off' : d.techpack.review_state === 'stale' ? '○ Tech pack: re-review needed' : d.techpack.review_state === 'changes_requested' ? '○ Tech pack: changes requested' : '○ Tech pack: not signed off'}</Badge></button>
           {d.locks.length > 0 && <Badge tone="info" title="Controlled specification fields are locked while these requests are active">🔒 {d.locks.length} active request(s)</Badge>}
           <button className="link small" onClick={() => setDlg('info')}>What’s missing?</button></div>
         <Tabs label="Style sections" value={tab} onChange={keep} tabs={[{ id: 'overview', label: 'Overview' }, { id: 'costing', label: 'Costing' }, { id: 'sampling', label: 'Sampling' }, { id: 'order', label: 'Order' }, { id: 'production', label: 'Production' }]} />
@@ -193,7 +199,7 @@ function StylePage() {
         {tab === 'production' && <ProductionTab styleId={style.id} />}
       </div>
       {actionId && st.actions[actionId] && <Drawer title="Action details" onClose={() => { const n = new URLSearchParams(q); n.delete('action'); setQ(n) }}><FocusDetail workId={st.actions[actionId].work_id} mode="panel" focus={{ actionId }} /></Drawer>}
-      {dlg === 'tech' && <TechPackDialog styleId={style.id} onClose={() => setDlg(null)} />}
+      {dlg === 'tech' && <TechPackDialog styleId={style.id} initialTab={q.get('doc') === 'techpack' ? 'review' : 'contents'} onClose={() => { setDlg(null); if (q.get('doc')) { const n = new URLSearchParams(q); n.delete('doc'); setQ(n, { replace: true }) } }} />}
       {dlg === 'bom' && <BomDialog styleId={style.id} onClose={() => setDlg(null)} />}
       {dlg === 'pom' && <MeasurementsDialog styleId={style.id} onClose={() => setDlg(null)} />}
       {dlg === 'files' && <FilesDialog styleId={style.id} onClose={() => setDlg(null)} />}

@@ -246,3 +246,48 @@ def test_partial_capture_is_visible(api):
     a = s["audits"]["au_sun2"]
     captured = len([f for f in s["findings"].values() if f["audit_id"] == "au_sun2"])
     assert a["reported_totals"]["critical"] == 4 and captured == 3 and not a["capture_complete"]
+
+
+# ---------------- tech pack review & sample review tasks ----------------
+CHECK_OK = [{"key": k, "state": "ok"} for k in ("complete", "prior", "feasible", "queries", "attachments")]
+SECTIONS = {k: f"{k} text" for k in ("construction", "stitching", "artwork", "labels", "care", "packing")}
+
+
+def test_techpack_review_needs_content_checklist_and_is_not_sample_approval(api):
+    assert api.get("u_tech")["actions"]["a_tp_vs1"]["status"] == "open"
+    r = api.op("review_techpack", {"style_id": "s_vs1", "result": "approve", "checklist": CHECK_OK}, user="u_tech", expect=409)
+    assert any("sections still empty" in p for p in r["problems"])
+    api.op("review_techpack", {"style_id": "s_vs1", "result": "approve", "checklist": CHECK_OK}, user="u_head", expect=403)   # not a technical reviewer
+    api.op("save_techpack_content", {"style_id": "s_vs1", "sections": SECTIONS}, user="u_tech")
+    r = api.op("review_techpack", {"style_id": "s_vs1", "result": "approve", "checklist": CHECK_OK[:4]}, user="u_tech", expect=409)
+    assert any("Checklist item" in p for p in r["problems"])
+    s = api.op("review_techpack", {"style_id": "s_vs1", "result": "approve", "checklist": CHECK_OK}, user="u_tech")["state"]
+    assert s["styles"]["s_vs1"]["techpack_review"]["state"] == "approved"
+    assert s["actions"]["a_tp_vs1"]["status"] == "completed"
+    assert s["sample_requests"] and not any(r["external"]["state"] == "approved" for r in s["sample_rounds"].values() if s["sample_requests"][r["request_id"]]["style_id"] == "s_vs1")
+
+
+def test_techpack_changes_requested_creates_followup_and_completes_review_task(api):
+    s = api.op("review_techpack", {"style_id": "s_vs2", "result": "changes", "note": "Collar stand detail missing", "checklist": [{"key": "complete", "state": "issue", "note": "Collar stand"}]}, user="u_tech")["state"]
+    assert s["actions"]["a_tp_vs2"]["status"] == "completed"
+    assert s["styles"]["s_vs2"]["techpack_review"]["state"] == "changes_requested"
+    assert any(a["title"].startswith("Address tech pack review comments") and a["assignee_id"] == "u_merch2" for a in s["actions"].values())
+
+
+def test_editing_content_after_approval_makes_review_stale_and_lock_is_respected(api):
+    r = api.op("save_techpack_content", {"style_id": "s_meadow", "sections": SECTIONS}, user="u_tech", expect=409)       # active PP request locks it
+    assert r["code"] == "locked"
+    api.op("save_techpack_content", {"style_id": "s_vs1", "sections": SECTIONS}, user="u_tech")
+    api.op("review_techpack", {"style_id": "s_vs1", "result": "approve", "checklist": CHECK_OK}, user="u_tech")
+    r = api.op("save_techpack_content", {"style_id": "s_vs1", "sections": {**SECTIONS, "care": "changed"}}, user="u_tech")
+    assert r["result"]["stale"] and r["state"]["derived"]["styles"]["s_vs1"]["techpack"]["review_state"] == "stale"
+
+
+def test_receipt_creates_review_task_once_and_internal_review_completes_it(api):
+    api.op("record_sample_movement", {"round_id": "sr_a_pp2", "kind": "received", "qty": 3, "date": "2026-10-06", "colour": "Navy", "size": "M"}, expect=422)   # only 2 dispatched
+    r = api.op("record_sample_movement", {"round_id": "sr_a_pp2", "kind": "received", "qty": 2, "date": "2026-10-06", "colour": "Navy", "size": "M"})
+    tasks = [a for a in r["state"]["actions"].values() if a.get("sample_round_id") == "sr_a_pp2" and a.get("sample_review")]
+    assert len(tasks) == 1 and tasks[0]["assignee_id"] == "u_tech" and tasks[0]["status"] == "open"
+    api.op("add_correction", {"round_id": "sr_a_pp2", "text": "Collar roll", "scope": "Navy M"}, user="u_tech")
+    s = api.op("internal_review", {"round_id": "sr_a_pp2", "result": "changes", "note": "Collar roll"}, user="u_tech")["state"]
+    assert s["actions"][tasks[0]["id"]]["status"] == "completed"

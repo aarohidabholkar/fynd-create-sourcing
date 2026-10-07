@@ -1,0 +1,62 @@
+import { expect, test } from '@playwright/test'
+import { actAs, resetDemo } from './helpers'
+
+test.beforeEach(async ({ page }) => { await resetDemo(page) })
+
+test('Technical reviewer: sees tech pack and sample review tasks, fills the tech pack, signs off', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message))
+  await actAs(page, /Technical reviewer/)
+  await page.goto('/my-work')
+  await expect(page.getByRole('button', { name: /Complete and review the tech pack: Formal shirt - white/ })).toBeVisible()
+  await page.getByRole('button', { name: /Complete and review the tech pack: Formal shirt - white/ }).click()
+  await page.getByRole('link', { name: 'Open tech pack review' }).click()
+  await expect(page).toHaveURL(/doc=techpack/)
+
+  // sign-off is blocked until the content is filled and every checklist item answered
+  await page.getByRole('button', { name: 'Sign off tech pack' }).click()
+  await expect(page.getByText(/Tech pack sections still empty/)).toBeVisible()
+  await page.getByRole('tab', { name: 'Contents' }).click()
+  for (const label of ['Construction details', 'Stitching and seams', 'Artwork and placement', 'Labels', 'Care information', 'Packing requirements']) await page.getByLabel(label).fill(`${label} (demo)`)
+  await page.getByRole('button', { name: 'Save tech pack content' }).click()
+  await page.getByRole('tab', { name: 'Technical review' }).click()
+  await page.getByRole('button', { name: 'Sign off tech pack' }).click()
+  await expect(page.getByText(/Checklist item not signed off/).first()).toBeVisible()
+  for (const t of ['Tech pack is complete', 'Previous comments', 'Construction is feasible', 'No unresolved queries', 'Required attachments']) await page.getByRole('group', { name: new RegExp(t) }).getByLabel('OK').check()
+  await page.getByRole('button', { name: 'Sign off tech pack' }).click()
+  await expect(page.getByText(/not sample approval or production release/).first()).toBeVisible()
+  const s = await (await page.request.get('/api/state', { headers: { 'X-Demo-User': 'u_tech' } })).json()
+  expect(s.styles.s_vs1.techpack_review.state).toBe('approved')
+  expect(s.actions.a_tp_vs1.status).toBe('completed')
+  expect(errors).toEqual([])
+})
+
+test('Receiving a sample creates a review task for the technical reviewer, who starts the review from it', async ({ page }) => {
+  await page.goto('/styles/s_meadow/sampling?round=sr_a_pp2')
+  await page.getByRole('button', { name: 'Record movement' }).click()
+  await page.getByRole('textbox', { name: 'Colour' }).fill('Navy')
+  await page.getByRole('spinbutton', { name: 'Pieces' }).fill('2')
+  await expect(page.getByText('Review, QC and brand approval are NOT triggered')).toBeVisible()
+  await page.getByRole('button', { name: 'Record', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await actAs(page, /Technical reviewer/)
+  await page.goto('/my-work')
+  await page.getByRole('button', { name: /Review PP sample round 2/ }).first().click()
+  await page.getByRole('link', { name: 'Start sample review' }).click()
+  await expect(page).toHaveURL(/styles\/s_meadow\/sampling\?round=sr_a_pp2/)
+  await expect(page.getByRole('button', { name: 'Pass internal QC' })).toBeVisible()
+})
+
+test('Overview upcoming commitments has a week strip, day filter and a calendar', async ({ page }) => {
+  await page.goto('/overview')
+  const panel = page.getByRole('region', { name: 'Upcoming commitments' })
+  await expect(panel.getByRole('group', { name: 'This week' })).toBeVisible()
+  await panel.getByRole('button', { name: /8 Oct, 2 commitments/ }).click()
+  await expect(panel.getByText('Showing 8 Oct')).toBeVisible()
+  await expect(panel.getByText('Re-inspection of reworked Lot 1')).toBeVisible()
+  await expect(panel.getByText('Fabric options shared')).toHaveCount(0)
+  await panel.getByRole('button', { name: 'View calendar' }).click()
+  const dlg = page.getByRole('dialog')
+  await expect(dlg.getByRole('grid', { name: 'Month' })).toBeVisible()
+  await dlg.getByRole('button', { name: /Price list review with Jaal/ }).click()
+  await expect(page).toHaveURL(/overview\/work\/w_jaal\?commitment=c_jaal_review/)
+})

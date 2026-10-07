@@ -282,7 +282,9 @@ def build(st, user_id):
     return {
         "works": wf, "attention": att,
         "styles": {sid: {"readiness": style_readiness(st, sid), "locks": active_requests_for_style(st, sid), "position": style_position(st, sid),
-                         "current_spec": next((v["v"] for v in st["styles"][sid]["spec_versions"] if v["state"] == "released"), None)}
+                         "current_spec": next((v["v"] for v in st["styles"][sid]["spec_versions"] if v["state"] == "released"), None),
+                         "techpack": {"content_complete": all((st["styles"][sid].get("techpack_content", {}).get(k) or "").strip() for k in ("construction", "stitching", "artwork", "labels", "care", "packing")),
+                                      "review_state": st["styles"][sid]["techpack_review"]["state"]}}
                    for sid in st["styles"]},
         "allocations": {aid: allocation_summary(st, a) for aid, a in st["allocations"].items()},
         "orders": order_sum, "vendors": {vid: vendor_summary(st, vid) for vid in st["vendors"]},

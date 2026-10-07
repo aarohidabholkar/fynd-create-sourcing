@@ -15,37 +15,83 @@ function useStyle(id: string) {
   return { st, style: st.styles[id] as R, d: st.derived.styles[id] as R }
 }
 
-export function TechPackDialog({ styleId, onClose }: { styleId: string; onClose: () => void }) {
+const TP_LABELS: Record<string, string> = { construction: 'Construction details', stitching: 'Stitching and seams', artwork: 'Artwork and placement', labels: 'Labels', care: 'Care information', packing: 'Packing requirements' }
+const TP_STATE: Record<string, [string, string]> = { not_started: ['Not reviewed yet', ''], in_review: ['Review in progress (draft)', 'info'], approved: ['Signed off', 'success'], changes_requested: ['Changes requested', 'attention'], stale: ['Content changed after sign-off: re-review needed', 'attention'] }
+const CHECKS: [string, string][] = [['complete', 'Tech pack is complete (flats, construction, BOM, measurements)'], ['prior', 'Previous comments are addressed'], ['feasible', 'Construction is feasible at the intended vendors'], ['queries', 'No unresolved queries'], ['attachments', 'Required attachments are present']]
+
+export function TechPackDialog({ styleId, onClose, initialTab = 'contents' }: { styleId: string; onClose: () => void; initialTab?: 'contents' | 'review' | 'versions' }) {
   const { st, style, d } = useStyle(styleId)
-  const [reason, setReason] = useState('')
-  const [changed, setChanged] = useState('')
-  const rel = useSubmit('release_spec')
-  const canEdit = (st.users[st.me].caps as string[]).includes('edit')
+  const caps = st.users[st.me].caps as string[]
+  const canEdit = caps.includes('edit'); const canReview = caps.includes('technical_review')
+  const [tab, setTab] = useState(initialTab)
+  const [sec, setSec] = useState<Record<string, string>>({ ...style.techpack_content })
+  const [reason, setReason] = useState(''); const [changed, setChanged] = useState('')
+  const rv = style.techpack_review
+  const [checks, setChecks] = useState<Record<string, { state: string; note: string }>>(Object.fromEntries(CHECKS.map(([k]) => { const c = (rv.checklist || []).find((x: R) => x.key === k); return [k, { state: c?.state || '', note: c?.note || '' }] })))
+  const [note, setNote] = useState(rv.note || '')
+  const rel = useSubmit('release_spec'); const save = useSubmit('save_techpack_content'); const review = useSubmit('review_techpack')
+  const dirty = JSON.stringify(sec) !== JSON.stringify(style.techpack_content)
+  const hasContent = Object.values(style.techpack_content as Record<string, string>).some(v => v.trim())
+  const locked = d.locks.length > 0 && hasContent
+  const empty = Object.keys(TP_LABELS).filter(k => !(style.techpack_content[k] || '').trim())
+  const prereq: [boolean, string][] = [[style.bom.items.length > 0, 'BOM recorded'], [style.pom.length > 0, 'Measurements (POM) recorded'], [empty.length === 0, 'All tech pack sections filled in']]
+  const [rs, rt] = TP_STATE[rv.state] || TP_STATE.not_started
+  const payload = (result: string) => ({ style_id: styleId, result, note, checklist: CHECKS.map(([k]) => ({ key: k, ...checks[k] })) })
   return (
     <Dialog title={`Tech pack: ${style.name}`} onClose={onClose} wide footer={<button className="btn" onClick={onClose}>Close</button>}>
       <div className="col gap-16">
+        <div className="row wrap"><Badge tone={rt}>{rs}</Badge><span className="small muted">{rv.version ? `Reviewed against v${rv.version}` : 'No version reviewed yet'}{rv.by && ` · ${personLabel(st, rv.by)} · ${fmtDate(rv.at)}`}</span></div>
+        <div className="row" role="tablist" aria-label="Tech pack sections">{([['contents', 'Contents'], ['review', 'Technical review'], ['versions', 'Versions']] as const).map(([k, l]) => <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => setTab(k)}>{l}</button>)}</div>
         <LockNotice locks={d.locks} />
-        <div><h3>Versions and revision history</h3>
-          {style.spec_versions.length === 0 ? <p className="muted mt-8">No tech pack version has been released yet. Add a BOM first; a BOM is mandatory before a specification can be released.</p> : (
-            <table className="t mt-8"><thead><tr><th>Version</th><th>State</th><th>Date</th><th>Author</th><th>Reason and changes</th></tr></thead><tbody>
-              {[...style.spec_versions].reverse().map((v: R) => <tr key={v.v}><td><strong>v{v.v}</strong></td><td><Badge tone={v.state === 'released' ? 'success' : ''}>{v.state}{v.frozen ? ' · frozen' : ''}</Badge></td><td>{fmtDate(v.date, true)}</td><td>{personLabel(st, v.author_id)}</td>
-                <td>{v.reason}{v.changed.length > 0 && <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>{v.changed.map((c: string) => <li key={c}>{c}</li>)}</ul>}</td></tr>)}</tbody></table>)}
-          <p className="hint mt-8">A newly uploaded document is not released, frozen or approved. Requests keep the version snapshot they were issued with; history never changes retroactively.</p></div>
-        <div><h3>Contents</h3><ul style={{ margin: '4px 0 0 18px' }}>
-          <li>Flats and sketches: <span className="muted">no file stored in this prototype{style.files.some((f: R) => f.kind === 'Tech pack') ? ` (listed: ${style.files.filter((f: R) => f.kind === 'Tech pack').map((f: R) => f.name).join(', ')})` : ''}</span></li>
-          <li>Bill of materials: {style.bom.items.length ? `version ${style.bom.version}, ${style.bom.items.length} items` : <span className="muted">not recorded</span>}</li>
-          <li>Measurements (POM): {style.pom.length ? `${style.pom.length} points` : <span className="muted">not recorded</span>}</li>
-          <li>Construction, artwork placement, labels, care and packing: <span className="muted">held in the tech pack file; not stored in this prototype</span></li></ul></div>
-        {canEdit && style.bom.items.length > 0 && (
-          <div className="inline-form"><h3>Release a new version</h3>
-            {d.locks.length > 0 ? <p className="small">Releasing is blocked while requests are active (see above).</p> : <>
-              <Field label="Reason for the change" required><input type="text" value={reason} onChange={e => setReason(e.target.value)} /></Field>
-              <Field label="What changed (one per line)"><textarea value={changed} onChange={e => setChanged(e.target.value)} placeholder="e.g. Body length +1 cm" /></Field>
-              <div className="hint">Affected quotes and allocations are flagged for review; commercial terms are not recalculated automatically.</div>
-              <ErrorBox err={rel.error} />
-              <div><button className="btn primary small" disabled={rel.busy || !reason.trim()} onClick={async () => { const r = await rel.submit({ style_id: styleId, reason, changed: changed.split('\n').map(x => x.trim()).filter(Boolean) }); if (r) { toast(`Specification v${r.version} released.${r.affected.length ? ' Flagged for review: ' + r.affected.join('; ') : ''}`); setReason(''); setChanged('') } }}>Release version</button></div></>}
+
+        {tab === 'contents' && (
+          <div className="col gap-12">
+            <p className="hint">Flats, sketches and pattern files are not stored in this prototype; the written specification below is. BOM and measurements are edited from their own buttons in the style header.</p>
+            <table className="t"><tbody>
+              <tr><td className="strong">BOM</td><td>{style.bom.items.length ? `Version ${style.bom.version}, ${style.bom.items.length} items` : <span className="muted">Not recorded</span>}</td></tr>
+              <tr><td className="strong">Measurements</td><td>{style.pom.length ? `${style.pom.length} points of measure` : <span className="muted">Not recorded</span>}</td></tr>
+              <tr><td className="strong">Files</td><td>{style.files.length ? style.files.map((f: R) => f.name).join(', ') : <span className="muted">None linked</span>} <span className="muted small">(listed only)</span></td></tr></tbody></table>
+            {Object.keys(TP_LABELS).map(k => <Field key={k} label={TP_LABELS[k]} required={false}><textarea value={sec[k] || ''} disabled={!canEdit || locked} onChange={e => setSec({ ...sec, [k]: e.target.value })} placeholder={canEdit ? 'Not filled in yet' : ''} /></Field>)}
+            <ErrorBox err={save.error} />
+            {canEdit ? <div className="row"><button className="btn primary" disabled={save.busy || !dirty || locked} onClick={async () => { const r = await save.submit({ style_id: styleId, sections: sec }); if (r) toast(r.stale ? 'Content saved. The earlier sign-off no longer covers it; it needs re-review.' : 'Tech pack content saved.') }}>{save.busy ? 'Saving…' : 'Save tech pack content'}</button>{dirty && <span className="small" style={{ color: 'var(--attention)' }}>Unsaved changes</span>}{locked && <span className="small muted">Locked while requests are active</span>}</div> : <p className="hint">You can read the tech pack; editing needs edit permission (demo role).</p>}
           </div>)}
-        {canEdit && style.bom.items.length === 0 && <div className="alert info">Add a BOM from the BOM button to make this style sourcing-ready.</div>}
+
+        {tab === 'review' && (
+          <div className="col gap-12">
+            <p className="hint">This is the design/technical quick check before the pack goes to a vendor. Signing it off does <strong>not</strong> approve any sample and does not release production.</p>
+            <div className="panel pad"><h3>Before sign-off</h3><ul style={{ margin: '6px 0 0 4px', padding: 0, listStyle: 'none' }}>{prereq.map(([ok, l]) => <li key={l}><span className={ok ? 'check-ok' : 'check-wait'}>{ok ? '✓' : '○'}</span> {l}{!ok && l.startsWith('All tech') && <span className="muted small"> (empty: {empty.map(k => TP_LABELS[k].toLowerCase()).join(', ')}) <button className="link" onClick={() => setTab('contents')}>Fill in</button></span>}</li>)}</ul></div>
+            <h3>Design / technical checklist</h3>
+            {CHECKS.map(([k, l]) => (
+              <fieldset key={k} className="panel pad" style={{ margin: 0 }}><legend className="small strong" style={{ padding: '0 6px' }}>{l}</legend>
+                <div className="row wrap">{[['ok', 'OK'], ['issue', 'Issue'], ['na', 'Not applicable']].map(([v, t]) => <label key={v} className="row"><input type="radio" name={`chk-${k}`} disabled={!canReview} checked={checks[k].state === v} onChange={() => setChecks({ ...checks, [k]: { ...checks[k], state: v } })} />{t}</label>)}
+                  <input type="text" aria-label={`Note for: ${l}`} placeholder={checks[k].state === 'na' ? 'Reason required' : 'Note (what is the issue?)'} disabled={!canReview} style={{ flex: 1, minWidth: 200 }} value={checks[k].note} onChange={e => setChecks({ ...checks, [k]: { ...checks[k], note: e.target.value } })} /></div></fieldset>))}
+            <Field label="Overall review note"><textarea value={note} disabled={!canReview} onChange={e => setNote(e.target.value)} /></Field>
+            {review.error?.extra.problems ? <div className="alert error" role="alert"><strong>Cannot sign off yet:</strong><ul style={{ margin: '4px 0 0 18px' }}>{review.error.extra.problems.map((p: string) => <li key={p}>{p}</li>)}</ul></div> : <ErrorBox err={review.error} />}
+            {canReview ? <div className="row wrap">
+              <button className="btn" disabled={review.busy} onClick={async () => { if (await review.submit(payload('draft'))) toast('Review draft saved.') }}>Save review draft</button>
+              <button className="btn" disabled={review.busy} onClick={async () => { if (await review.submit(payload('changes'))) toast('Changes requested. A follow-up task was created for the style owner.') }}>Request changes</button>
+              <button className="btn primary" disabled={review.busy} onClick={async () => { if (await review.submit(payload('approve'))) toast('Tech pack signed off. This is not sample approval or production release.') }}>Sign off tech pack</button></div>
+              : <p className="hint">Only a technical reviewer can sign off the tech pack (demo permission). It is waiting for review.</p>}
+            {rv.history.length > 0 && <div><h3 className="mb-8">Review history</h3><ul className="list">{[...rv.history].reverse().map((h: R, i: number) => <li key={i} style={{ padding: '6px 0' }}><Badge tone={(TP_STATE[h.state] || TP_STATE.not_started)[1]}>{(TP_STATE[h.state] || TP_STATE.not_started)[0]}</Badge> <span className="small muted">v{h.version ?? '–'} · {personLabel(st, h.by)} · {fmtDate(h.at)}</span>{h.note && <div className="small">{h.note}</div>}</li>)}</ul></div>}
+          </div>)}
+
+        {tab === 'versions' && (
+          <div className="col gap-12">
+            {style.spec_versions.length === 0 ? <p className="muted">No tech pack version has been released yet. A BOM is mandatory before a specification can be released.</p> : (
+              <table className="t"><thead><tr><th>Version</th><th>State</th><th>Date</th><th>Author</th><th>Reason and changes</th></tr></thead><tbody>
+                {[...style.spec_versions].reverse().map((v: R) => <tr key={v.v}><td><strong>v{v.v}</strong></td><td><Badge tone={v.state === 'released' ? 'success' : ''}>{v.state}{v.frozen ? ' · frozen' : ''}</Badge></td><td>{fmtDate(v.date, true)}</td><td>{personLabel(st, v.author_id)}</td>
+                  <td>{v.reason}{v.changed.length > 0 && <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>{v.changed.map((c: string) => <li key={c}>{c}</li>)}</ul>}</td></tr>)}</tbody></table>)}
+            <p className="hint">A newly uploaded or edited document is not released, frozen or approved. Requests keep the version snapshot they were issued with.</p>
+            {canEdit && style.bom.items.length > 0 && (
+              <div className="inline-form"><h3>Release a new version</h3>
+                {d.locks.length > 0 ? <p className="small">Releasing is blocked while requests are active (see above).</p> : <>
+                  <Field label="Reason for the change" required><input type="text" value={reason} onChange={e => setReason(e.target.value)} /></Field>
+                  <Field label="What changed (one per line)"><textarea value={changed} onChange={e => setChanged(e.target.value)} placeholder="e.g. Body length +1 cm" /></Field>
+                  <div className="hint">Affected quotes and allocations are flagged for review; commercial terms are not recalculated automatically.</div>
+                  <ErrorBox err={rel.error} />
+                  <div><button className="btn primary small" disabled={rel.busy || !reason.trim()} onClick={async () => { const r = await rel.submit({ style_id: styleId, reason, changed: changed.split('\n').map(x => x.trim()).filter(Boolean) }); if (r) { toast(`Specification v${r.version} released.${r.affected.length ? ' Flagged for review: ' + r.affected.join('; ') : ''}`); setReason(''); setChanged('') } }}>Release version</button></div></>}
+              </div>)}
+          </div>)}
       </div>
     </Dialog>
   )

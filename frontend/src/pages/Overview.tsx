@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import { PageHead } from '../Shell'
@@ -6,6 +6,7 @@ import { FocusDetail } from '../detail/FocusDetail'
 import { useRemembered, useScrollMemory } from '../hooks'
 import { useSnap, type R } from '../store'
 import { Badge, Empty, Person } from '../ui'
+import { CalendarDialog } from '../components/Calendar'
 import { TODAY, addDays, daysBetween, effDate, fmtDate, personLabel, plural } from '../util'
 
 function firstSentence(t: string) { const m = t.match(/^[^.]+\.?/); return m ? m[0] : t }
@@ -39,6 +40,8 @@ export default function Overview() {
   const [naCollapsed, setNaCollapsed] = useRemembered('ov:naCollapsed', false)
   const [ucCollapsed, setUcCollapsed] = useRemembered('ov:ucCollapsed', false)
   const [resolvedView, setResolvedView] = useRemembered('ov:resolved', false)
+  const [ucDay, setUcDay] = useState<string | null>(null)
+  const [cal, setCal] = useState(false)
   useScrollMemory('overview')
 
   const works = Object.values(st.works) as R[]
@@ -69,7 +72,10 @@ export default function Overview() {
   const clear = () => { setBrandF('all'); setStateF('all'); setSearch('') }
   const open = (w: string, p = '') => nav(`/overview/work/${w}${p}`)
   const naShown = naAll ? att : att.slice(0, 3)
-  const ucShown = ucAll ? upcoming : upcoming.slice(0, 3)
+  const dayList = ucDay ? (Object.values(st.commitments) as R[]).filter(c => c.state !== 'done' && effDate(c) === ucDay).sort((a, b) => a.id.localeCompare(b.id)) : upcoming
+  const ucShown = ucDay || ucAll ? dayList : dayList.slice(0, 3)
+  const wk = (() => { const t = new Date(TODAY + 'T00:00:00Z'); const dow = (t.getUTCDay() + 6) % 7; return Array.from({ length: 7 }, (_, i) => addDays(TODAY, i - dow)) })()
+  const calItems = (Object.values(st.commitments) as R[]).filter(c => c.state !== 'done').map(c => { const w = st.works[c.work_id]; return { date: effDate(c), kind: 'Commitment', title: c.title, ctx: `${st.brands[w.brand_id].name} · ${w.title}`, work: w.id, commitment: c.id } }).sort((a, b) => a.date.localeCompare(b.date))
 
   let lastBrand = ''
   return (
@@ -121,22 +127,39 @@ export default function Overview() {
           <section className="panel" aria-label="Upcoming commitments">
             <div className="panel-head"><div className="grow"><h2>Upcoming commitments</h2><div className="small muted">Next 7 days · {fmtDate(TODAY)} to {fmtDate(addDays(TODAY, 7))}</div></div>
               <button className="btn ghost small" aria-expanded={!ucCollapsed} onClick={() => setUcCollapsed(!ucCollapsed)}>{ucCollapsed ? 'Expand' : 'Collapse'}</button></div>
-            {!ucCollapsed && (upcoming.length === 0 ? <Empty title="No upcoming commitments in this period" /> : (
+            {!ucCollapsed && (
               <>
-                <ul className="list">
-                  {ucShown.map(c => { const w = st.works[c.work_id]; return (
-                    <li key={c.id} style={{ padding: 0 }}><button className="item-btn" style={{ padding: '10px 16px' }} onClick={() => open(w.id, `?commitment=${c.id}`)}>
-                      <div className="row wrap" style={{ gap: 8 }}>
-                        <span className="strong" style={{ minWidth: 52 }}>{fmtDate(effDate(c))}</span>
-                        <Badge tone={c.proposed ? 'attention' : c.state === 'agreed' ? 'success' : ''}>{c.state === 'agreed' ? 'Agreed' : c.state === 'planned' ? 'Planned' : 'Proposed'}</Badge>
-                        {c.proposed && <Badge tone="attention">Revision proposed: {fmtDate(c.proposed)}</Badge>}</div>
-                      <div className="small muted">{st.brands[w.brand_id].name} · {w.title}</div>
-                      <div>{c.title}. <span className="muted">{c.readiness}</span></div>
-                      <div className="small muted"><Person id={c.owner_id} /></div></button></li>) })}
-                </ul>
-                {upcoming.length > 3 && <div style={{ padding: '8px 16px' }}><button className="btn link-like small" onClick={() => setUcAll(!ucAll)}>{ucAll ? 'Show fewer' : `View all (${upcoming.length})`}</button></div>}
+                <div style={{ padding: '0 16px' }}>
+                  <div className="row" role="group" aria-label="This week" style={{ gap: 4, justifyContent: 'space-between' }}>
+                    {wk.map(d => {
+                      const n = calItems.filter(x => x.date === d).length
+                      const lbl = new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' })
+                      return <button key={d} className="btn small" aria-pressed={ucDay === d} onClick={() => setUcDay(ucDay === d ? null : d)}
+                        style={{ flexDirection: 'column', height: 52, padding: '0 6px', flex: 1, background: ucDay === d ? 'var(--nav-active)' : d === TODAY ? 'var(--subtle)' : undefined, color: ucDay === d ? '#fff' : undefined, borderColor: ucDay === d ? 'var(--nav-active)' : undefined }}
+                        aria-label={`${fmtDate(d)}${d === TODAY ? ' (today)' : ''}, ${n} ${n === 1 ? 'commitment' : 'commitments'}`}>
+                        <span className="small">{lbl}</span><strong>{Number(d.slice(8))}</strong>{n > 0 ? <span style={{ fontSize: 9 }}>● {n}</span> : <span style={{ fontSize: 9 }}>&nbsp;</span>}</button>
+                    })}
+                  </div>
+                  <div className="small muted row" style={{ marginTop: 8 }}>{ucDay ? <>Showing {fmtDate(ucDay)} · <button className="link" onClick={() => setUcDay(null)}>Show next 7 days</button></> : <span className="grow">Next 7 days</span>}<span className="grow" /><button className="btn link-like small" onClick={() => setCal(true)}>View calendar</button></div>
+                </div>
+                {ucShown.length === 0 ? <Empty title={ucDay ? 'No commitments on this day' : 'No upcoming commitments in this period'} /> : (
+                  <>
+                    <ul className="list">
+                      {ucShown.map(c => { const w = st.works[c.work_id]; return (
+                        <li key={c.id} style={{ padding: 0 }}><button className="item-btn" style={{ padding: '10px 16px' }} onClick={() => open(w.id, `?commitment=${c.id}`)}>
+                          <div className="row wrap" style={{ gap: 8 }}>
+                            <span className="strong" style={{ minWidth: 52 }}>{fmtDate(effDate(c))}</span>
+                            <Badge tone={c.proposed ? 'attention' : c.state === 'agreed' ? 'success' : ''}>{c.state === 'agreed' ? 'Agreed' : c.state === 'planned' ? 'Planned' : 'Proposed'}</Badge>
+                            {c.proposed && <Badge tone="attention">Revision proposed: {fmtDate(c.proposed)}</Badge>}</div>
+                          <div className="small muted">{st.brands[w.brand_id].name} · {w.title}</div>
+                          <div>{c.title}. <span className="muted">{c.readiness}</span></div>
+                          <div className="small muted"><Person id={c.owner_id} /></div></button></li>) })}
+                    </ul>
+                    {!ucDay && upcoming.length > 3 && <div style={{ padding: '8px 16px' }}><button className="btn link-like small" onClick={() => setUcAll(!ucAll)}>{ucAll ? 'Show fewer' : `View all (${upcoming.length})`}</button></div>}
+                  </>
+                )}
               </>
-            ))}
+            )}
           </section>
         </div>
 
@@ -182,6 +205,7 @@ export default function Overview() {
           </div>
         </section>
       </div>
+      {cal && <CalendarDialog title="Commitments calendar (all brands)" agenda={calItems} hint="Planned, proposed and agreed commitments across all brands. A proposed date is shown on its current agreed date until accepted." onClose={() => setCal(false)} onOpen={(x: any) => { setCal(false); open(x.work, `?commitment=${x.commitment}`) }} />}
     </>
   )
 }

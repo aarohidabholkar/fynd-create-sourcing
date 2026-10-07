@@ -25,7 +25,9 @@ def create_style(st, user, body):
     sid = nid(st, "s")
     st["styles"][sid] = {"id": sid, "brand_id": body["brand_id"], "work_id": body.get("work_id"), "name": body["name"].strip(), "category": body["category"].strip(),
                          "season": body.get("season", ""), "owner_id": user["id"], "lifecycle": "draft", "created_at": now(), "description": body.get("description", ""),
-                         "image": None, "spec_versions": [], "bom": {"version": 1, "items": []}, "pom": [], "files": [], "selection": None, "owner_history": []}
+                         "image": None, "spec_versions": [], "bom": {"version": 1, "items": []}, "pom": [], "files": [], "selection": None, "owner_history": [],
+                         "techpack_content": {k: "" for k in ("construction", "stitching", "artwork", "labels", "care", "packing")}, "techpack_history": [],
+                         "techpack_review": {"state": "not_started", "version": None, "by": None, "at": None, "note": "", "checklist": [], "history": []}}
     if body.get("work_id"):
         w = get(st, "works", body["work_id"], "Work")
         w["style_ids"].append(sid)
@@ -375,6 +377,16 @@ def _after_receipt(st, user, r, req, s, body):
             c["proposed"] = None
             touch(c)
             msgs.append("Arrival commitment marked actual.")
+    from .derive import OPEN
+    if r["received"] > 0 and r["internal"]["state"] in ("not_started", "in_progress") and not any(
+            a.get("sample_round_id") == r["id"] and a.get("sample_review") and a["status"] in OPEN for a in st["actions"].values()):
+        reviewer = next((u for u in st["users"].values() if u["role"] == "Technical reviewer"), None) or next((u for u in st["users"].values() if "technical_review" in u["caps"]), None)
+        if reviewer:
+            from .ops_core import add_action
+            res = add_action(st, user, {"title": f"Review {req['type']} sample round {r['round']} ({st['vendors'][req['vendor_id']]['name']})", "assignee_id": reviewer["id"], "work_id": s["work_id"],
+                                        "style_id": s["id"], "vendor_id": req["vendor_id"], "expected_outcome": "Measure against the tech pack, review construction and fit, then pass internal QC or request corrections."})
+            st["actions"][res["action_id"]].update({"sample_round_id": r["id"], "sample_review": True})
+            msgs.append(f"Review task created for {reviewer['role']}.")
     return " ".join(msgs)
 
 
@@ -461,6 +473,10 @@ def internal_review(st, user, body):
         title = "Corrections requested"
     else:
         raise ApiError(422, "Unknown result.", "validation")
+    from .ops_core import _complete
+    for a in list(st["actions"].values()):
+        if a.get("sample_round_id") == r["id"] and a.get("sample_review") and a["status"] in ("open", "blocked"):
+            _complete(st, user, a, f"{title}. " + (body.get("note") or ""), None)
     add_event(st, user["id"], "internal_review", f"{title}: {req['type']} sample round {r['round']} ({st['vendors'][req['vendor_id']]['name']})",
               (body.get("note") or "") + " Internal QC is not brand approval or release.", _style_scope(st, s, vendor_id=req["vendor_id"], sample_round_id=r["id"]))
     bump_work(st, s["work_id"])
@@ -871,4 +887,86 @@ def add_round_photo(st, user, body):
     r = get(st, "sample_rounds", body["round_id"], "Sample round")
     r.setdefault("photos", []).append({"id": nid(st, "ph"), "name": body["name"].strip(), "caption": (body.get("caption") or "").strip(), "uploaded_at": now(),
                                       "by": user["id"], "demo_placeholder": True})
+    return {}
+
+
+# ---------- tech pack: content, design/technical checklist, sign-off ----------
+TP_SECTIONS = ["construction", "stitching", "artwork", "labels", "care", "packing"]
+TP_CHECKLIST = [("complete", "Tech pack is complete (flats, construction, BOM, measurements)"), ("prior", "Previous comments are addressed"),
+                ("feasible", "Construction is feasible at the intended vendors"), ("queries", "No unresolved queries"), ("attachments", "Required attachments are present")]
+
+
+@op("save_techpack_content")
+def save_techpack_content(st, user, body):
+    need(user, "edit")
+    s = get(st, "styles", body["style_id"], "Style")
+    cur = s.get("techpack_content", {})
+    if any(v.strip() for v in cur.values()) and _locks(st, s["id"]):
+        raise ApiError(409, "Tech pack content is locked while these requests are active: " + ", ".join(f"{l['id']} ({l['kind']})" for l in _locks(st, s["id"])) +
+                       ". Raise the change through the request workflow.", "locked", locks=_locks(st, s["id"]))
+    new = {k: (body.get("sections", {}).get(k) or "").strip() for k in TP_SECTIONS}
+    changed = [k for k in TP_SECTIONS if new[k] != cur.get(k, "")]
+    if not changed:
+        raise ApiError(422, "Nothing was changed.", "validation")
+    s["techpack_content"] = new
+    s.setdefault("techpack_history", []).append({"at": now(), "by": user["id"], "changed": changed})
+    rv = s["techpack_review"]
+    stale = rv["state"] == "approved"
+    if stale:
+        rv["state"] = "stale"
+    add_event(st, user["id"], "techpack_edited", f"Tech pack content updated on {s['name']}", "Sections: " + ", ".join(changed) + (". A previous approval no longer covers this content; re-review needed." if stale else "."), _style_scope(st, s))
+    return {"stale": stale}
+
+
+@op("review_techpack")
+def review_techpack(st, user, body):
+    """Design/technical quick checklist and sign-off. This is NOT sample approval and NOT production release."""
+    need(user, "technical_review")
+    require(body, "style_id", "result")
+    s = get(st, "styles", body["style_id"], "Style")
+    rv = s["techpack_review"]
+    cl_in = {c["key"]: c for c in body.get("checklist", [])}
+    checklist = [{"key": k, "label": l, "state": (cl_in.get(k, {}).get("state") or None), "note": (cl_in.get(k, {}).get("note") or "").strip()} for k, l in TP_CHECKLIST]
+    ver = next((v["v"] for v in s["spec_versions"] if v["state"] == "released"), None)
+    if body["result"] == "draft":
+        rv.update({"state": "in_review", "checklist": checklist, "by": user["id"], "at": now(), "note": body.get("note", ""), "version": ver})
+        return {}
+    problems = []
+    if body["result"] == "approve":
+        if not s["bom"]["items"]:
+            problems.append("The BOM is missing.")
+        if not s["pom"]:
+            problems.append("Measurements (POM) are missing.")
+        empty = [k for k in TP_SECTIONS if not (s.get("techpack_content", {}).get(k) or "").strip()]
+        if empty:
+            problems.append("Tech pack sections still empty: " + ", ".join(empty) + ".")
+        for c in checklist:
+            if c["state"] not in ("ok", "na"):
+                problems.append(f"Checklist item not signed off: {c['label']}.")
+            if c["state"] == "na" and not c["note"]:
+                problems.append(f"A reason is required to mark “{c['label']}” not applicable.")
+        if problems:
+            raise ApiError(409, "The tech pack cannot be approved yet. " + " ".join(problems), "cannot_approve", problems=problems)
+        state, title = "approved", "Tech pack review signed off"
+    elif body["result"] == "changes":
+        issues = [c for c in checklist if c["state"] == "issue"]
+        if not issues and not (body.get("note") or "").strip():
+            raise ApiError(422, "Say what needs to change: mark a checklist item as an issue or add a note.", "validation")
+        state, title = "changes_requested", "Tech pack changes requested"
+    else:
+        raise ApiError(422, "Unknown result.", "validation")
+    entry = {"state": state, "version": ver, "by": user["id"], "at": now(), "note": (body.get("note") or "").strip(), "checklist": checklist}
+    rv["history"].append({k: entry[k] for k in ("state", "version", "by", "at", "note")})
+    rv.update(entry)
+    add_event(st, user["id"], "techpack_review", f"{title}: {s['name']}", (entry["note"] + " ").strip() + "This is not sample approval or production release.", _style_scope(st, s))
+    from .ops_core import _complete
+    for a in list(st["actions"].values()):
+        if a.get("techpack_review_for") == s["id"] and a["status"] in ("open", "blocked"):
+            _complete(st, user, a, f"{title}.", None)
+    if state == "changes_requested":
+        from .ops_core import add_action
+        issues_txt = "; ".join(f"{c['label']}" + (f" ({c['note']})" if c["note"] else "") for c in checklist if c["state"] == "issue") or entry["note"]
+        add_action(st, user, {"title": f"Address tech pack review comments: {s['name']}", "assignee_id": s["owner_id"], "work_id": s["work_id"], "style_id": s["id"],
+                              "expected_outcome": issues_txt})
+        notify(st, s["owner_id"], "changes_requested", f"Tech pack changes requested: {s['name']}", f"/styles/{s['id']}/overview?doc=techpack", exclude=user["id"])
     return {}

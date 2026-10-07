@@ -29,27 +29,41 @@ def _spec(v, state, day, author, reason, changed=None):
     return {"v": v, "state": state, "date": d(day), "author_id": author, "reason": reason, "changed": changed or [], "frozen": state == "released"}
 
 
-def _style(sid, brand, work, name, cat, owner, lifecycle="active", bom=True, specs=None, pom=True, selection=None, season="AW27", files=None, created=-40, desc=""):
+TP_SECTIONS = ["construction", "stitching", "artwork", "labels", "care", "packing"]
+_TP_FULL = {"construction": "Flat-felled side seams; set-in sleeve; two-piece collar with stand (demo text).", "stitching": "SPI 12; topstitch 0.1 cm on collar and cuffs; bartack at pocket corners (demo text).",
+            "artwork": "Woven label at back neck; no print (demo text).", "labels": "Main label back neck; care label left side seam; size label with main label (demo text).",
+            "care": "Machine wash cold; do not bleach; cool iron (demo text).", "packing": "Fold with collar stiffener; one polybag per piece; 25 pcs per carton (demo text)."}
+_TP_EMPTY = {k: "" for k in TP_SECTIONS}
+
+
+def _tp_review(state="not_started", version=None, by=None, day=None, note=""):
+    return {"state": state, "version": version, "by": by, "at": dt(day, "11:00") if day is not None else None, "note": note, "checklist": [], "history": []}
+
+
+def _style(sid, brand, work, name, cat, owner, lifecycle="active", bom=True, specs=None, pom=True, selection=None, season="AW27", files=None, created=-40, desc="", tp=None, tpr=None):
     return {"id": sid, "brand_id": brand, "work_id": work, "name": name, "category": cat, "season": season, "owner_id": owner,
             "lifecycle": lifecycle, "created_at": dt(created), "description": desc, "image": None,
             "spec_versions": specs if specs is not None else [_spec(1, "released", created + 3, owner, "Initial release")],
             "bom": _bom(1, bom), "pom": _pom() if pom else [], "files": files or [{"name": "Tech pack.pdf", "kind": "Tech pack", "demo": True}],
-            "selection": selection, "owner_history": []}
+            "selection": selection, "owner_history": [],
+            "techpack_content": dict(_TP_EMPTY if tp is None else tp), "techpack_history": [], "techpack_review": tpr or _tp_review()}
 
 
 STYLES = {
     "s_meadow": _style("s_meadow", "b_argo", "w_meadow", "Meadow shirt", "Menswear / Shirts / Casual", "u_merch1",
         specs=[_spec(1, "superseded", -70, "u_merch1", "Initial release"),
                _spec(2, "released", -40, "u_tech", "Body length revised +2 cm after fit round 1", ["Body length +2 cm", "Fabric consumption 1.60 → 1.65 m/pc"])],
+        tp=_TP_FULL, tpr=_tp_review("approved", 2, "u_tech", -41, "Approved for sampling and costing; v2 reflects the fit round 1 length change."),
         selection={"state": "selected", "by": "u_head", "at": dt(-50), "why": "Brand selected after fit round 2 approval.", "source": "Brand email (summary supplied)"},
         files=[{"name": "Tech pack v2.pdf", "kind": "Tech pack", "demo": True}, {"name": "Artwork - collar label.ai", "kind": "Artwork", "demo": True},
                {"name": "Pattern block M.dxf", "kind": "Pattern", "demo": True}], created=-70,
         desc="Casual cotton poplin shirt, two colourways (Navy, Olive)."),
     "s_orbit": _style("s_orbit", "b_argo", "w_orbit", "Orbit overshirt", "Menswear / Outerwear / Overshirt", "u_merch1",
         specs=[_spec(1, "released", -30, "u_tech", "Initial release")], created=-32,
-        files=[{"name": "Tech pack v1.pdf", "kind": "Tech pack", "demo": True}], desc="Workwear overshirt with chest patch pockets."),
+        files=[{"name": "Tech pack v1.pdf", "kind": "Tech pack", "demo": True}], desc="Workwear overshirt with chest patch pockets.",
+        tp=_TP_FULL, tpr=_tp_review("approved", 1, "u_tech", -29, "Approved; pocket placement to be checked at fit round 1.")),
     "s_trail": _style("s_trail", "b_argo", "w_orbit", "Trail vest", "Menswear / Outerwear / Vest", "u_merch1",
-        selection={"state": "held", "by": "u_head", "at": dt(-6), "why": "Brand holding until Orbit fit is settled.", "source": "Weekly sync"}, created=-25),
+        selection={"state": "held", "by": "u_head", "at": dt(-6), "why": "Brand holding until Orbit fit is settled.", "source": "Weekly sync"}, created=-25, tp=_TP_FULL),
     "s_gr1": _style("s_gr1", "b_vmart", "w_green", "Green co-ord set 1", "Womenswear / Ethnic / Co-ord", "u_merch2", season="Festive",
         selection={"state": "selected", "by": "u_merch2", "at": dt(-14), "why": "Brand shortlisted.", "source": "Brand message (summary supplied)"}, created=-30),
     "s_gr2": _style("s_gr2", "b_vmart", "w_green", "Green co-ord set 2", "Womenswear / Ethnic / Co-ord", "u_merch2", season="Festive",

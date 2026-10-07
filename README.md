@@ -27,8 +27,8 @@ Use **Account menu → Reset demo data** to restore the original dataset, and **
 ## Tests
 
 ```bash
-cd backend && python3 -m pytest -q          # 45 rule tests (duplicate-request guard, state separations, privacy, gates, allocation…)
-cd frontend && npx playwright test          # 11 end-to-end journeys (starts both servers if needed)
+cd backend && python3 -m pytest -q          # 49 rule tests (duplicate-request guard, state separations, privacy, gates, allocation…)
+cd frontend && npx playwright test          # 14 end-to-end journeys (starts both servers if needed)
 ```
 
 ## Architecture

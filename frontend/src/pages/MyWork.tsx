@@ -8,6 +8,7 @@ import { requestsFor } from '../detail/ActionBits'
 import { useRemembered, useScrollMemory } from '../hooks'
 import { toast, useSnap, type R } from '../store'
 import { Badge, Dialog, Drawer, Empty, Tabs } from '../ui'
+import { CalendarDialog } from '../components/Calendar'
 import { OPEN, TODAY, addDays, daysBetween, effDate, fmtDate, fmtTs, personLabel, plural, relDay } from '../util'
 
 type Item = { kind: 'task'; action: R; group: string; date: string | null; replyBy: string | null; leadership: R | null; reqToMe: R | null }
@@ -24,7 +25,7 @@ export default function MyWork() {
   const [tab, setTab] = useRemembered('mw:tab', 'tasks')
   const [search, setSearch] = useRemembered('mw:search', '')
   const [brandF, setBrandF] = useRemembered('mw:brand', 'all')
-  const [open, setOpen] = useRemembered<Record<string, boolean>>('mw:groups', { overdue: true, today: true, later: false, nodate: false })
+  const [open, setOpen] = useRemembered<Record<string, boolean>>('mw:groups', { overdue: true, today: true })
   const [day, setDay] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [composer, setComposer] = useState<null | { note?: R }>(null)
@@ -127,11 +128,11 @@ export default function MyWork() {
 
             {tab === 'tasks' && (items.length === 0 ? <Empty title={search || brandF !== 'all' ? 'No tasks match your search' : 'You have no open tasks'}>{(search || brandF !== 'all') && <button className="link" onClick={() => { setSearch(''); setBrandF('all') }}>Clear filters</button>}</Empty> : (
               <div>
-                {groups.map(([key, label, list]) => (list.length === 0 && key !== 'overdue' ? null : list.length === 0 ? null : (
+                {groups.map(([key, label, list]) => { const fresh = list.some(i => i.action.created_at.slice(0, 10) === TODAY && i.action.origin === 'prototype'); const isOpen = open[key] ?? fresh; return (list.length === 0 ? null : (
                   <div key={key}>
-                    <button className="btn link-like" style={{ width: '100%', padding: '10px 16px', background: 'var(--subtle)', justifyContent: 'space-between', color: 'var(--text)', textDecoration: 'none' }} aria-expanded={open[key]} onClick={() => setOpen({ ...open, [key]: !open[key] })}>
-                      <span className="strong">{label} <span className="muted" style={{ fontWeight: 400 }}>· {list.length}</span></span><span className="small muted">{open[key] ? 'Hide' : 'Show'}</span></button>
-                    {open[key] && <ul className="list">{list.map(i => {
+                    <button className="btn link-like" style={{ width: '100%', padding: '10px 16px', background: 'var(--subtle)', justifyContent: 'space-between', color: 'var(--text)', textDecoration: 'none' }} aria-expanded={isOpen} onClick={() => setOpen({ ...open, [key]: !isOpen })}>
+                      <span className="strong">{label} <span className="muted" style={{ fontWeight: 400 }}>· {list.length}</span></span><span className="small muted">{fresh && !isOpen ? 'New · ' : ''}{isOpen ? 'Hide' : 'Show'}</span></button>
+                    {isOpen && <ul className="list">{list.map(i => {
                       const a = i.action; const w = a.work_id ? st.works[a.work_id] : null
                       const replyOnly = i.replyBy && (!a.due || a.due > i.replyBy)
                       return (
@@ -144,7 +145,7 @@ export default function MyWork() {
                                 <span>{a.due ? `Due ${fmtDate(a.due)}` : 'No date set'}</span>
                                 {key === 'overdue' && a.due && a.due < TODAY && <Badge tone="error">Overdue · {plural(daysBetween(a.due, TODAY), 'day')}</Badge>}
                                 {i.replyBy && <Badge tone={i.replyBy < TODAY ? 'error' : 'attention'}>{i.replyBy === TODAY ? 'Reply by today' : `Reply by ${fmtDate(i.replyBy)}`}</Badge>}
-                                {a.status === 'blocked' && <Badge tone="error">Blocked</Badge>}
+                                {a.origin === 'prototype' && a.created_at.slice(0, 10) === TODAY && <Badge tone="info">New</Badge>}{a.status === 'blocked' && <Badge tone="error">Blocked</Badge>}
                                 {a.status === 'awaiting_review' && <Badge tone="info">Awaiting review</Badge>}
                                 {i.leadership && <Badge tone="info">Leadership requested an update</Badge>}
                                 {i.reqToMe && !i.leadership && <Badge tone="attention">Update requested</Badge>}
@@ -156,7 +157,7 @@ export default function MyWork() {
                           </div>
                         </li>)
                     })}</ul>}
-                  </div>)))}
+                  </div>)) })}
               </div>
             ))}
 
@@ -257,29 +258,5 @@ export default function MyWork() {
       )}
       {calendar && <CalendarDialog agenda={agenda} onClose={() => setCalendar(false)} onOpen={(x: any) => { setCalendar(false); x.action ? openAction(x.action) : nav(`/overview/work/${x.work}?commitment=${x.commitment}`) }} />}
     </>
-  )
-}
-
-function CalendarDialog({ agenda, onClose, onOpen }: { agenda: any[]; onClose: () => void; onOpen: (x: any) => void }) {
-  const [month, setMonth] = useState(TODAY.slice(0, 7))
-  const [y, m] = month.split('-').map(Number)
-  const first = `${month}-01`
-  const lead = (new Date(first + 'T00:00:00Z').getUTCDay() + 6) % 7
-  const days = new Date(Date.UTC(y, m, 0)).getUTCDate()
-  const cells = Array.from({ length: lead + days }, (_, i) => (i < lead ? null : `${month}-${String(i - lead + 1).padStart(2, '0')}`))
-  const shift = (n: number) => { const t = new Date(Date.UTC(y, m - 1 + n, 1)); setMonth(t.toISOString().slice(0, 7)) }
-  return (
-    <Dialog title="Your calendar (work deadlines)" onClose={onClose} wide footer={<button className="btn" onClick={onClose}>Close</button>}>
-      <div className="row mb-8"><button className="btn small" onClick={() => shift(-1)}>‹ Previous</button><strong className="grow" style={{ textAlign: 'center' }}>{new Date(first + 'T00:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</strong><button className="btn small" onClick={() => shift(1)}>Next ›</button></div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 4 }} role="grid" aria-label="Month">
-        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => <div key={d} className="small muted" style={{ textAlign: 'center' }}>{d}</div>)}
-        {cells.map((d, i) => d === null ? <div key={i} /> : (
-          <div key={d} role="gridcell" className="panel" style={{ minHeight: 72, padding: 4, background: d === TODAY ? 'var(--subtle)' : undefined }}>
-            <div className="small"><strong>{Number(d.slice(8))}</strong></div>
-            {agenda.filter(x => x.date === d).map((x, j) => <button key={j} className="link small trunc" style={{ display: 'block', maxWidth: '100%', textAlign: 'left' }} onClick={() => onOpen(x)} title={`${x.kind}: ${x.title}`}>{x.kind === 'Reply due' ? '↩ ' : x.kind === 'Commitment' ? '◆ ' : '● '}{x.title}</button>)}
-          </div>))}
-      </div>
-      <p className="hint mt-8">● task due · ↩ reply due · ◆ commitment. Undated work stays in your task list under “No date set”.</p>
-    </Dialog>
   )
 }
