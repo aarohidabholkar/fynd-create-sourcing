@@ -242,7 +242,10 @@ export function AssigneeButton({ action, onDone }: { action: R; onDone?: () => v
 /* ---------- compact timeline: dots with hover/focus/click, expandable list ---------- */
 export function Timeline({ events, since, title = 'Timeline', maxDots = 14 }: { events: R[]; since?: string | null; title?: string; maxDots?: number }) {
   const { state } = useSnap()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(true)
+  const box = useRef<HTMLElement>(null)
+  // Expanded by default; only a very narrow container starts as the compact dot rail
+  useLayoutEffect(() => { if (box.current && box.current.getBoundingClientRect().width < 240) setExpanded(false) }, [])
   const [hover, setHover] = useState<{ ev: R; x: number; y: number } | null>(null)
   const [pinned, setPinned] = useState<string | null>(null)
   const sorted = [...events].sort((a, b) => b.ts.localeCompare(a.ts))
@@ -265,7 +268,7 @@ export function Timeline({ events, since, title = 'Timeline', maxDots = 14 }: { 
   )
   const pinnedEv = pinned ? sorted.find(e => e.id === pinned) : null
   return (
-    <section aria-label={title} className="tl">
+    <section aria-label={title} className="tl" ref={box}>
       <div className="row mb-8"><h3 className="grow">{title} <span className="muted" style={{ fontWeight: 400 }}>· {sorted.length} events</span></h3>
         <button className="btn ghost small" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? 'Collapse' : 'Expand'}</button></div>
       {!expanded && (
